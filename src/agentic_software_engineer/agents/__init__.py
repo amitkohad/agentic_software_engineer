@@ -2,6 +2,7 @@
 
 from agentic_software_engineer.agents.base import BaseAgent
 from agentic_software_engineer.agents.architecture_agent import ArchitectureAgent
+from agentic_software_engineer.agents.coding_agent import CodingAgent
 from agentic_software_engineer.agents.models import (
     AgentResponse,
     Artifact,
@@ -18,6 +19,7 @@ __all__ = [
     "ArchitectureAgent",
     "Artifact",
     "BaseAgent",
+    "CodingAgent",
     "ExecutionLog",
     "ExecutionMetrics",
     "ExecutionStatus",

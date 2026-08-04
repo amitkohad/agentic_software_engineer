@@ -163,6 +163,8 @@ class AgenticSDLCState(BaseModel):
     tasks: list[Task] = Field(default_factory=list, description="Planned SDLC work items.")
     dependencies: list[Dependency] = Field(default_factory=list, description="Directed task prerequisite edges.")
     architecture: dict[str, Any] = Field(default_factory=dict, description="Structured architecture decisions and artifacts.")
+    code_generation_plan: dict[str, Any] = Field(default_factory=dict, description="Validated code-generation plan and artifact ordering.")
+    regeneration_targets: list[str] = Field(default_factory=list, description="Optional file paths requested for partial regeneration.")
     generated_files: list[GeneratedFile] = Field(default_factory=list, description="Generated-project file change inventory.")
     validation_results: list[ValidationResult] = Field(default_factory=list, description="Quality, test, and security outcomes.")
     documentation: dict[str, Any] = Field(default_factory=dict, description="Structured documentation artifacts and references.")
