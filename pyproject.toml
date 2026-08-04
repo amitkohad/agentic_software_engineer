@@ -17,4 +17,4 @@ dependencies = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/agentic_software_engineer"]
+packages = ["src/agentic_software_engineer", "src/app"]

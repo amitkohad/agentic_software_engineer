@@ -1,0 +1,211 @@
+"""Deterministic FastAPI route generator for approved architecture contracts."""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+from collections.abc import Sequence
+from typing import Protocol
+
+from agentic_software_engineer.domain.entities.architecture_specification import (
+    ApiDefinition,
+    ArchitectureSpecification,
+)
+from agentic_software_engineer.domain.entities.code_generation_plan import (
+    CodeGenerationPlan,
+    FileSpecification,
+)
+from agentic_software_engineer.orchestrator.state import AgenticSDLCState as AgentState
+
+
+class ApiDefinitionSelector(Protocol):
+    """Select the API definitions owned by a generated controller file."""
+
+    def select(
+        self,
+        file_specification: FileSpecification,
+        architecture: ArchitectureSpecification,
+    ) -> Sequence[ApiDefinition]:
+        """Return API operations to render in the target controller file."""
+
+
+class AllApiDefinitionSelector:
+    """Default selector that renders every approved API operation into one router."""
+
+    def select(
+        self,
+        file_specification: FileSpecification,
+        architecture: ArchitectureSpecification,
+    ) -> Sequence[ApiDefinition]:
+        """Return all architecture API definitions in their declared order."""
+        return architecture.api_definitions
+
+
+class APIGenerator:
+    """Generate one FastAPI controller containing routes and DI boundaries only.
+
+    The generator never calls an LLM and never implements domain behavior. Each
+    route delegates the request to an injected ``RouteHandler`` contract, which
+    the generated project's composition root must bind to an application use
+    case. An injected selector lets a planner partition API operations across
+    several controller files without changing generator behavior.
+    """
+
+    _SUPPORTED_METHODS = frozenset({"get", "post", "put", "patch", "delete", "head", "options"})
+    _TYPE_MAPPING = {
+        "str": "str",
+        "string": "str",
+        "int": "int",
+        "integer": "int",
+        "float": "float",
+        "number": "float",
+        "bool": "bool",
+        "boolean": "bool",
+        "uuid": "str",
+    }
+
+    def __init__(
+        self,
+        selector: ApiDefinitionSelector | None = None,
+        *,
+        logger: logging.Logger | None = None,
+    ) -> None:
+        """Create the generator with an injectable API-to-controller selector."""
+        self._selector = selector or AllApiDefinitionSelector()
+        self._logger = logger or logging.getLogger(__name__)
+
+    def can_generate(self, file_specification: FileSpecification) -> bool:
+        """Return whether a Python API/controller file is owned by this generator."""
+        purpose = file_specification.purpose.casefold()
+        return file_specification.path.endswith(".py") and ("api" in purpose or "route" in purpose or "controller" in purpose)
+
+    async def generate(
+        self,
+        file_specification: FileSpecification,
+        plan: CodeGenerationPlan,
+        state: AgentState,
+        existing_content: str | None,
+    ) -> str:
+        """Render one complete FastAPI router file from approved API contracts.
+
+        Args:
+            file_specification: Exact approved file target and validation rules.
+            plan: Full approved generation plan; retained for protocol consistency.
+            state: Shared state containing the approved architecture artifact.
+            existing_content: Existing file content when an overwrite is allowed.
+
+        Returns:
+            Raw Python source for exactly one FastAPI controller/router file.
+
+        Raises:
+            ValueError: If architecture is missing, no APIs are assigned, or an
+                API operation does not use a supported REST method.
+        """
+        del plan, existing_content
+        if not state.architecture:
+            raise ValueError("FastAPI route generation requires an approved architecture.")
+        architecture = ArchitectureSpecification.model_validate(state.architecture)
+        api_definitions = self._selector.select(file_specification, architecture)
+        if not api_definitions:
+            raise ValueError(f"No API definitions are assigned to '{file_specification.path}'.")
+
+        source = self._render_controller(api_definitions)
+        self._logger.info(
+            "Generated FastAPI route controller",
+            extra={"execution_id": state.execution_id, "path": file_specification.path, "route_count": len(api_definitions)},
+        )
+        return source
+
+    def _render_controller(self, api_definitions: Sequence[ApiDefinition]) -> str:
+        """Build a complete controller module with no embedded business behavior."""
+        route_blocks = "\n\n\n".join(self._render_route(api_definition) for api_definition in api_definitions)
+        return (
+            '"""FastAPI routes generated from the approved architecture specification."""\n\n'
+            "# Generated by Agentic Software Engineer.\n"
+            "from __future__ import annotations\n\n"
+            "from typing import Annotated, Any, Protocol\n\n"
+            "from fastapi import Body, Depends, Header, Path, Query, Request\n"
+            "from fastapi import APIRouter\n\n\n"
+            "class RouteHandler(Protocol):\n"
+            "    \"\"\"Application boundary invoked by HTTP routes.\"\"\"\n\n"
+            "    async def handle(self, operation_id: str, payload: dict[str, Any], request: Request) -> Any:\n"
+            "        \"\"\"Execute the approved application use case for one API operation.\"\"\"\n\n\n"
+            "def get_route_handler() -> RouteHandler:\n"
+            "    \"\"\"Resolve the application handler from the composition root.\"\"\"\n"
+            "    raise RuntimeError(\"Configure get_route_handler in the application composition root.\")\n\n\n"
+            "router = APIRouter()\n\n\n"
+            f"{route_blocks}\n"
+        )
+
+    def _render_route(self, api_definition: ApiDefinition) -> str:
+        """Render one REST operation as a thin FastAPI route adapter."""
+        method = api_definition.method.casefold()
+        if method not in self._SUPPORTED_METHODS:
+            raise ValueError(f"Unsupported REST method '{api_definition.method}' for '{api_definition.operation_id}'.")
+
+        operation_name = self._python_identifier(api_definition.operation_id)
+        parameters, payload_items = self._render_parameters(api_definition)
+        response_status = next((response.status_code for response in api_definition.responses if 200 <= response.status_code < 300), 200)
+        decorator = (
+            f"@router.{method}(\n"
+            f"    {json.dumps(api_definition.path)},\n"
+            f"    operation_id={json.dumps(api_definition.operation_id)},\n"
+            f"    summary={json.dumps(api_definition.summary)},\n"
+            f"    status_code={response_status},\n"
+            ")"
+        )
+        signature_parameters = ["request: Request", *parameters, "handler: Annotated[RouteHandler, Depends(get_route_handler)]"]
+        payload = "\n".join(f"        {json.dumps(name)}: {name}," for name in payload_items)
+        return (
+            f"{decorator}\n"
+            f"async def {operation_name}(\n"
+            + "\n".join(f"    {parameter}," for parameter in signature_parameters)
+            + "\n) -> Any:\n"
+            f"    \"\"\"Delegate {api_definition.operation_id} to the application boundary.\"\"\"\n"
+            "    payload: dict[str, Any] = {\n"
+            f"{payload}\n"
+            "    }\n"
+            f"    return await handler.handle({json.dumps(api_definition.operation_id)}, payload, request)"
+        )
+
+    def _render_parameters(self, api_definition: ApiDefinition) -> tuple[list[str], list[str]]:
+        """Convert declared API parameters into explicit FastAPI dependency bindings."""
+        parameters: list[str] = []
+        payload_items: list[str] = []
+        for parameter in api_definition.parameters:
+            name = self._python_identifier(parameter.name)
+            python_type = self._TYPE_MAPPING.get(parameter.data_type.casefold(), "Any")
+            location = parameter.location.casefold()
+            if location == "path":
+                parameters.append(f"{name}: Annotated[{python_type}, Path(description={json.dumps(parameter.description)})]")
+            elif location == "query":
+                if parameter.required:
+                    parameters.append(f"{name}: Annotated[{python_type}, Query(description={json.dumps(parameter.description)})]")
+                else:
+                    parameters.append(f"{name}: Annotated[{python_type} | None, Query(description={json.dumps(parameter.description)})] = None")
+            elif location == "header":
+                if parameter.required:
+                    parameters.append(f"{name}: Annotated[{python_type}, Header(description={json.dumps(parameter.description)})]")
+                else:
+                    parameters.append(f"{name}: Annotated[{python_type} | None, Header(description={json.dumps(parameter.description)})] = None")
+            elif location == "body":
+                parameters.append(
+                    f"{name}: Annotated[{python_type}, Body(description={json.dumps(parameter.description)})]"
+                    if parameter.required
+                    else f"{name}: Annotated[{python_type} | None, Body(description={json.dumps(parameter.description)})] = None"
+                )
+            else:
+                raise ValueError(f"Unsupported parameter location '{parameter.location}' for '{api_definition.operation_id}'.")
+            payload_items.append(name)
+        return parameters, payload_items
+
+    @staticmethod
+    def _python_identifier(value: str) -> str:
+        """Convert an architecture identifier into a deterministic Python identifier."""
+        identifier = re.sub(r"[^0-9a-zA-Z_]", "_", value).strip("_").lower()
+        if not identifier:
+            raise ValueError("API operation identifiers must contain at least one alphanumeric character.")
+        if identifier[0].isdigit():
+            identifier = f"operation_{identifier}"
+        return identifier
