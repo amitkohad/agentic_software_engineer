@@ -1,6 +1,7 @@
 """Reusable agent lifecycle contracts and future specialist agents."""
 
 from agentic_software_engineer.agents.base import BaseAgent
+from agentic_software_engineer.agents.architecture_agent import ArchitectureAgent
 from agentic_software_engineer.agents.models import (
     AgentResponse,
     Artifact,
@@ -14,6 +15,7 @@ from agentic_software_engineer.agents.planning_agent import PlanningAgent
 
 __all__ = [
     "AgentResponse",
+    "ArchitectureAgent",
     "Artifact",
     "BaseAgent",
     "ExecutionLog",

@@ -34,8 +34,12 @@ def _make_openai_strict(schema: Any) -> Any:
         if updated_schema.get("type") == "object":
             updated_schema["additionalProperties"] = False
             properties = updated_schema.get("properties")
-            if isinstance(properties, dict) and "required" not in updated_schema:
-                updated_schema["required"] = list(properties.keys())
+            if isinstance(properties, dict):
+                required_properties = list(properties.keys())
+                existing_required = updated_schema.get("required")
+                if isinstance(existing_required, list):
+                    required_properties = list(dict.fromkeys([*existing_required, *required_properties]))
+                updated_schema["required"] = required_properties
 
         for key in ("properties", "$defs", "definitions"):
             if key in updated_schema and isinstance(updated_schema[key], dict):
