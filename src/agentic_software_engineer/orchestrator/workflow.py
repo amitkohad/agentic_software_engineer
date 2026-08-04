@@ -3,17 +3,18 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Literal
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
 from agentic_software_engineer.agents.base import BaseAgent
+from agentic_software_engineer.agents.architecture_agent import ArchitectureAgent
 from agentic_software_engineer.agents.planning_agent import PlanningAgent
 from agentic_software_engineer.agents.requirement_agent import RequirementAgent
 from agentic_software_engineer.orchestrator.state import AgenticSDLCState as AgentState
-from agentic_software_engineer.orchestrator.state import WorkflowStage
+from agentic_software_engineer.orchestrator.state import WorkflowExecutionStatus, WorkflowStage
 from dotenv import load_dotenv
 
 load_dotenv()  # Load environment variables from .env file
@@ -32,6 +33,7 @@ class AgenticSDLCWorkflow:
         self,
         requirement_agent: RequirementAgent,
         planning_agent: PlanningAgent,
+        architecture_agent: ArchitectureAgent,
         *,
         checkpointer: BaseCheckpointSaver | None = None,
         logger: logging.Logger | None = None,
@@ -41,12 +43,14 @@ class AgenticSDLCWorkflow:
         Args:
             requirement_agent: Agent that structures the original requirement.
             planning_agent: Agent that generates tasks and dependencies.
+            architecture_agent: Agent that generates the validated architecture artifact.
             checkpointer: LangGraph checkpoint adapter. A process-local
                 ``MemorySaver`` is used when omitted.
             logger: Application logger supplied by dependency injection.
         """
         self._requirement_agent = requirement_agent
         self._planning_agent = planning_agent
+        self._architecture_agent = architecture_agent
         self._checkpointer = checkpointer or MemorySaver()
         self._logger = logger or logging.getLogger(__name__)
 
@@ -55,16 +59,19 @@ class AgenticSDLCWorkflow:
 
         Returns:
             A LangGraph compiled graph with the flow ``START -> requirement ->
-            planning -> END``. Callers must pass a stable ``thread_id`` in their
-            LangGraph invocation configuration to resume from checkpoints.
+            planning -> architecture -> END``. The checkpointer persists state
+            after each graph node. Callers must pass a stable ``thread_id`` in
+            their LangGraph invocation configuration to resume from checkpoints.
         """
         graph = StateGraph(AgentState)
         self._register_agent_node(graph, "requirement_agent", self._requirement_agent, WorkflowStage.REQUIREMENTS)
         self._register_agent_node(graph, "planning_agent", self._planning_agent, WorkflowStage.PLANNING)
+        self._register_agent_node(graph, "architecture_agent", self._architecture_agent, WorkflowStage.ARCHITECTURE)
 
         graph.add_edge(START, "requirement_agent")
-        graph.add_edge("requirement_agent", "planning_agent")
-        graph.add_edge("planning_agent", END)
+        self._add_guarded_transition(graph, "requirement_agent", "planning_agent")
+        self._add_guarded_transition(graph, "planning_agent", "architecture_agent")
+        self._add_guarded_transition(graph, "architecture_agent", None)
 
         self._logger.info("Compiling Agentic SDLC workflow with checkpoint support")
         return graph.compile(checkpointer=self._checkpointer)
@@ -101,3 +108,33 @@ class AgenticSDLCWorkflow:
             return result
 
         graph.add_node(node_name, execute_node)
+
+    def _add_guarded_transition(
+        self,
+        graph: StateGraph,
+        source_node: str,
+        success_node: str | None,
+    ) -> None:
+        """Add a branch-ready edge that advances only after a successful stage.
+
+        Failed, cancelled, or approval-paused states terminate the current graph
+        invocation while the checkpointer retains the durable state. Future
+        branching policies can extend this method with additional route labels
+        without changing agent-node implementations.
+        """
+        routes: dict[Literal["continue", "end"], str] = {
+            "continue": success_node or END,
+            "end": END,
+        }
+        graph.add_conditional_edges(
+            source_node,
+            self._route_after_agent,
+            routes,
+        )
+
+    @staticmethod
+    def _route_after_agent(state: AgentState) -> Literal["continue", "end"]:
+        """Route successful states forward and preserve all other outcomes."""
+        if state.execution_status is WorkflowExecutionStatus.SUCCEEDED:
+            return "continue"
+        return "end"

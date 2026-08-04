@@ -13,8 +13,11 @@ from rich.table import Table
 
 from agentic_software_engineer.agents.planning_agent import PlanningAgent
 from agentic_software_engineer.agents.requirement_agent import RequirementAgent
+from agentic_software_engineer.agents.architecture_agent import ArchitectureAgent
+from agentic_software_engineer.domain.entities.architecture_specification import ArchitectureSpecification
 from agentic_software_engineer.orchestrator.state import AgenticSDLCState, WorkflowTimestamps
 from agentic_software_engineer.orchestrator.workflow import AgenticSDLCWorkflow
+from agentic_software_engineer.ui.architecture_printer import ArchitecturePrinter
 
 console = Console()
 
@@ -47,6 +50,7 @@ async def run() -> None:
     workflow = AgenticSDLCWorkflow(
         requirement_agent=RequirementAgent(client=client, model=model),
         planning_agent=PlanningAgent(client=client, model=model),
+        architecture_agent=ArchitectureAgent(client=client, model=model),
     )
 
     console.print(f"[cyan]Starting execution {execution_id}…[/]")
@@ -101,6 +105,12 @@ def _render_results(state: AgenticSDLCState) -> None:
     metrics_table.add_row("Retries", str(state.retry_count))
     metrics_table.add_row("Estimated cost", f"${state.metrics.estimated_cost_usd:.4f}")
     console.print(metrics_table)
+
+    if state.architecture:
+        specification = ArchitectureSpecification.model_validate(state.architecture)
+        ArchitecturePrinter(console).print(specification)
+    else:
+        console.print("\n[yellow]No architecture specification was generated.[/]")
 
 
 def main() -> None:
