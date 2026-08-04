@@ -13,6 +13,7 @@ dependencies = [
     "langgraph",
     "openai",
     "pydantic",
+    "rich",
 ]
 
 [tool.hatch.build.targets.wheel]

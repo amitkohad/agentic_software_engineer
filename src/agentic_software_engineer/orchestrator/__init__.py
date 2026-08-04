@@ -1,1 +1,1 @@
-"""Agent orchestration placeholders."""
+"""LangGraph orchestration, workflow state, and checkpoint composition."""
