@@ -287,7 +287,12 @@ class GenerationExecutor:
             validation_failures.extend(self._validation_messages(validation))
             self._logger.warning(
                 "Generated file validation failed",
-                extra={"execution_id": execution_id, "file_id": specification.id, "attempt": retry_number + 1},
+                extra={
+                    "execution_id": execution_id,
+                    "file_id": specification.id,
+                    "attempt": retry_number + 1,
+                    "blocking_rules": [issue.rule for issue in validation.issues if issue.blocking],
+                },
             )
 
         return self._failure_outcome(

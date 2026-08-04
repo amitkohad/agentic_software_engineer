@@ -76,9 +76,10 @@ class CodingAgent(BaseAgent):
         """Create or load a plan, enforce approval gates, and execute reachable files."""
         architecture = ArchitectureSpecification.model_validate(state.architecture)
         plan = await self._load_or_create_plan(state, architecture)
-        planned_state = self._persist(
-            state.model_copy(update={"code_generation_plan": plan.model_dump(mode="json")}, deep=True)
-        )
+        # Preserve the typed plan in live state. Checkpoint stores may later
+        # materialize it as JSON-compatible data; the hydration helpers below
+        # explicitly support that representation.
+        planned_state = self._persist(state.model_copy(update={"code_generation_plan": plan}, deep=True))
         approval_files = [
             file_specification.id
             for file_specification in plan.files
@@ -133,6 +134,10 @@ class CodingAgent(BaseAgent):
         plan = self._plan_from_state(state)
         report = self._report_from_state(state)
         failed_ids = set(report.failed_files)
+        # A blocked file could not run only because an upstream file failed.
+        # Include it in the targeted repair so it can resume once its direct
+        # dependency is regenerated; unrelated files remain untouched.
+        failed_ids.update(report.blocked_files)
         failed_ids.update(
             artifact.file_id
             for artifact in report.generated_files
@@ -190,7 +195,7 @@ class CodingAgent(BaseAgent):
         """Load a durable plan when available or create one from approved architecture."""
         if state.code_generation_plan:
             try:
-                return CodeGenerationPlan.model_validate(state.code_generation_plan)
+                return self._plan_from_state(state)
             except ValueError as error:
                 raise CodePlanningError("Persisted code-generation plan is invalid.") from error
         return await self._code_plan_generator.create_plan(state, architecture)
@@ -207,17 +212,23 @@ class CodingAgent(BaseAgent):
 
     @staticmethod
     def _plan_from_state(state: AgentState) -> CodeGenerationPlan:
-        """Load the validated durable code-generation plan from workflow state."""
+        """Load a plan from typed state or a strict-model JSON checkpoint payload."""
         if not state.code_generation_plan:
             raise GenerationExecutionError("Code-generation plan is missing from workflow state.")
-        return CodeGenerationPlan.model_validate(state.code_generation_plan)
+        if isinstance(state.code_generation_plan, CodeGenerationPlan):
+            return state.code_generation_plan
+        # ``model_validate_json`` performs JSON parsing before strict validation,
+        # so serialized enum and datetime values are correctly restored.
+        return CodeGenerationPlan.model_validate_json(json.dumps(state.code_generation_plan))
 
     @staticmethod
     def _report_from_state(state: AgentState) -> GenerationReport:
-        """Load the validated durable generation report from workflow state."""
+        """Load a report from typed state or a strict-model JSON checkpoint payload."""
         if not state.generation_report:
             raise GenerationExecutionError("Generation report is missing from workflow state.")
-        return GenerationReport.model_validate(state.generation_report)
+        if isinstance(state.generation_report, GenerationReport):
+            return state.generation_report
+        return GenerationReport.model_validate_json(json.dumps(state.generation_report))
 
     @staticmethod
     def _apply_report(state: AgentState, report: GenerationReport, *, preserve_completed: bool = False) -> AgentState:
@@ -256,7 +267,8 @@ class CodingAgent(BaseAgent):
         }
         return state.model_copy(
             update={
-                "generation_report": report.model_dump(mode="json"),
+                "generation_report": report,
+                "generated_artifacts": report.generated_files,
                 "generated_files": list(merged_files.values()),
                 "metrics": metrics,
                 "retry_count": state.retry_count + report.retry_count,
