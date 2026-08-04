@@ -1,0 +1,2 @@
+# Dependency versions will be defined during implementation.
+# Planned runtime packages: FastAPI, LangGraph, OpenAI SDK, Pydantic, and a DI container.

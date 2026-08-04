@@ -1,0 +1,1 @@
+"""OpenAI SDK adapter placeholders."""

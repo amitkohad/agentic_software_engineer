@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agentic-software-engineer"
+version = "0.1.0"
+description = "Enterprise-grade agentic software engineering platform"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "langgraph",
+    "openai",
+    "pydantic",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agentic_software_engineer"]
