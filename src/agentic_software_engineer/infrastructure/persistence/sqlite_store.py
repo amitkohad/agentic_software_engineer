@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import sqlite3
 from collections.abc import Mapping
 from contextlib import contextmanager
@@ -11,7 +12,9 @@ from pathlib import Path, PurePosixPath
 from threading import RLock
 from typing import Any, Iterator
 
+from cryptography.fernet import Fernet, InvalidToken
 from pydantic import BaseModel, ConfigDict, Field
+from pydantic.types import SecretStr
 
 from agentic_software_engineer.application.ports.state_store import AgentState, StateStore
 from agentic_software_engineer.codegen.project_builder import RollbackResult, WriteResult
@@ -33,6 +36,19 @@ class ExecutionSummary(BaseModel):
     project_name: str = Field(min_length=1)
     status: str = Field(min_length=1)
     updated_at: str = Field(min_length=1)
+
+
+class RuntimeConfiguration(BaseModel):
+    """Decrypted runtime configuration whose secret representation is masked."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    openai_api_key: SecretStr
+    openai_model: str = Field(min_length=1)
+
+
+class ConfigurationDecryptionError(RuntimeError):
+    """Raised when persisted configuration cannot be safely decrypted."""
 
 
 class SQLiteExecutionStore(StateStore):
@@ -186,6 +202,12 @@ class SQLiteExecutionStore(StateStore):
                     ON workflow_executions(updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_artifact_operations_execution
                     ON artifact_write_operations(execution_id, operation_id DESC);
+                CREATE TABLE IF NOT EXISTS runtime_configuration (
+                    configuration_key TEXT PRIMARY KEY,
+                    configuration_value TEXT NOT NULL,
+                    encrypted INTEGER NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
                 """
             )
 
@@ -200,6 +222,112 @@ class SQLiteExecutionStore(StateStore):
                 yield connection
         finally:
             connection.close()
+
+
+class EncryptedRuntimeConfigurationStore:
+    """Persist OpenAI runtime configuration without plaintext API-key storage."""
+
+    _API_KEY_SETTING = "openai_api_key"
+    _MODEL_SETTING = "openai_model"
+
+    def __init__(
+        self,
+        execution_store: SQLiteExecutionStore,
+        key_path: Path,
+        *,
+        logger: logging.Logger | None = None,
+    ) -> None:
+        """Create an encrypted configuration adapter over the workflow database."""
+        self._execution_store = execution_store
+        self._key_path = key_path.resolve()
+        self._logger = logger or logging.getLogger(__name__)
+        try:
+            self._fernet = Fernet(self._load_or_create_key())
+        except (ValueError, TypeError) as error:
+            raise ConfigurationDecryptionError("Configuration encryption key is invalid.") from error
+
+    def save(self, *, openai_api_key: str, openai_model: str) -> RuntimeConfiguration:
+        """Encrypt and persist an API key alongside its non-secret model name."""
+        api_key = openai_api_key.strip()
+        model = openai_model.strip()
+        if not api_key:
+            raise ValueError("OpenAI API key is required.")
+        if not model:
+            raise ValueError("OpenAI model is required.")
+        encrypted_key = self._fernet.encrypt(api_key.encode("utf-8")).decode("ascii")
+        with self._execution_store._lock, self._execution_store._connect() as connection:
+            connection.executemany(
+                """
+                INSERT INTO runtime_configuration (
+                    configuration_key, configuration_value, encrypted
+                ) VALUES (?, ?, ?)
+                ON CONFLICT(configuration_key) DO UPDATE SET
+                    configuration_value = excluded.configuration_value,
+                    encrypted = excluded.encrypted,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                [
+                    (self._API_KEY_SETTING, encrypted_key, 1),
+                    (self._MODEL_SETTING, model, 0),
+                ],
+            )
+        self._logger.info("Encrypted runtime configuration saved")
+        return RuntimeConfiguration(openai_api_key=SecretStr(api_key), openai_model=model)
+
+    def load(self) -> RuntimeConfiguration | None:
+        """Load and decrypt a complete saved runtime configuration."""
+        with self._execution_store._lock, self._execution_store._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT configuration_key, configuration_value, encrypted
+                FROM runtime_configuration
+                WHERE configuration_key IN (?, ?)
+                """,
+                (self._API_KEY_SETTING, self._MODEL_SETTING),
+            ).fetchall()
+        settings = {row[0]: (row[1], bool(row[2])) for row in rows}
+        if self._API_KEY_SETTING not in settings or self._MODEL_SETTING not in settings:
+            return None
+        encrypted_key, is_encrypted = settings[self._API_KEY_SETTING]
+        if not is_encrypted:
+            raise ConfigurationDecryptionError("Persisted API-key configuration is not encrypted.")
+        try:
+            api_key = self._fernet.decrypt(encrypted_key.encode("ascii")).decode("utf-8")
+        except (InvalidToken, UnicodeDecodeError, ValueError) as error:
+            raise ConfigurationDecryptionError("Persisted API-key configuration cannot be decrypted.") from error
+        model, _ = settings[self._MODEL_SETTING]
+        return RuntimeConfiguration(openai_api_key=SecretStr(api_key), openai_model=model)
+
+    def clear(self) -> None:
+        """Delete persisted provider credentials and model configuration."""
+        with self._execution_store._lock, self._execution_store._connect() as connection:
+            connection.execute(
+                "DELETE FROM runtime_configuration WHERE configuration_key IN (?, ?)",
+                (self._API_KEY_SETTING, self._MODEL_SETTING),
+            )
+        self._logger.info("Persisted runtime configuration cleared")
+
+    def _load_or_create_key(self) -> bytes:
+        """Load an injected master key or create a restricted local key file."""
+        injected_key = os.getenv("APP_CONFIGURATION_KEY", "").strip()
+        if injected_key:
+            return injected_key.encode("ascii")
+        self._key_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            file_descriptor = os.open(self._key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            key = self._key_path.read_bytes().strip()
+            if not key:
+                raise ConfigurationDecryptionError("Configuration encryption key file is empty.")
+            try:
+                os.chmod(self._key_path, 0o600)
+            except OSError:
+                self._logger.warning("Could not tighten configuration-key file permissions")
+            return key
+        key = Fernet.generate_key()
+        with os.fdopen(file_descriptor, "wb") as key_file:
+            key_file.write(key)
+        return key
 
 
 class SQLiteProjectBuilder:

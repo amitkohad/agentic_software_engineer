@@ -4,8 +4,9 @@ Enterprise-ready project scaffold for an autonomous software development lifecyc
 
 ## Run the interfaces
 
-Configure `OPENAI_API_KEY` and `OPENAI_MODEL`, install the project dependencies,
-then start either interface:
+For CLI usage, configure `OPENAI_API_KEY` and `OPENAI_MODEL`. The Streamlit UI
+also provides a Runtime panel that saves the API key encrypted in SQLite and
+reuses it across sessions. Then start either interface:
 
 ```powershell
 python main.py
@@ -18,6 +19,21 @@ Streamlit UI uses `data/agentic_sdlc.sqlite3` for workflow state and generated
 artifact content; it does not materialize generated source files on disk.
 Saved executions can be reopened and their artifacts downloaded as an in-memory
 ZIP archive from the UI.
+
+## Run with Docker
+
+Build the Streamlit image and provide provider configuration only at runtime:
+
+```powershell
+docker build -t agentic-software-engineer .
+docker run --rm -p 8501:8501 -v agentic-sdlc-data:/app/data agentic-software-engineer
+```
+
+Open `http://localhost:8501` and enter the API key and model in the Runtime
+panel. The named volume retains the SQLite execution database, encrypted API
+key, encryption-key file, and generated artifacts across container replacements.
+Secrets are not copied into the image. For managed deployments, inject a stable
+Fernet key with `APP_CONFIGURATION_KEY` instead of relying on the generated key.
 
 ## Architecture
 

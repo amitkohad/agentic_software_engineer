@@ -9,11 +9,13 @@ description = "Enterprise-grade agentic software engineering platform"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "cryptography>=45",
     "fastapi",
     "langgraph",
     "openai",
     "pydantic",
     "rich",
+    "python-dotenv",
     "streamlit>=1.42",
 ]
 

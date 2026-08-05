@@ -1,3 +1,4 @@
+cryptography>=45
 fastapi
 langgraph
 openai
@@ -5,3 +6,4 @@ pydantic
 rich
 streamlit>=1.42
 uvicorn
+python-dotenv
