@@ -217,3 +217,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+data/*.sqlite3
+data/*.sqlite3-shm
+data/*.sqlite3-wal
+data/.configuration.key
