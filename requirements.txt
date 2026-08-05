@@ -3,4 +3,5 @@ langgraph
 openai
 pydantic
 rich
+streamlit>=1.42
 uvicorn
