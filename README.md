@@ -13,9 +13,11 @@ streamlit run streamlit_app.py
 ```
 
 Both interfaces execute the same dependency-injected LangGraph workflow. The
-Streamlit UI retains the current result for the browser session and provides
-architecture, planning, audit, validation, source-preview, and ZIP-download
-views. Generated projects are written beneath `generated_projects/<execution-id>`.
+CLI writes generated projects beneath `generated_projects/<execution-id>`. The
+Streamlit UI uses `data/agentic_sdlc.sqlite3` for workflow state and generated
+artifact content; it does not materialize generated source files on disk.
+Saved executions can be reopened and their artifacts downloaded as an in-memory
+ZIP archive from the UI.
 
 ## Architecture
 

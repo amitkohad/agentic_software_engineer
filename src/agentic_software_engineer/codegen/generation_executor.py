@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from agentic_software_engineer.codegen.dependency_resolver import DependencyResolver
 from agentic_software_engineer.codegen.generic_generator import GenericCodeGenerator
-from agentic_software_engineer.codegen.project_builder import ProjectBuilder, RollbackResult, WriteResult
+from agentic_software_engineer.codegen.project_builder import ArtifactProjectBuilder, RollbackResult, WriteResult
 from agentic_software_engineer.domain.entities.code_generation_plan import (
     CodeGenerationPlan,
     FileSpecification,
@@ -61,7 +61,7 @@ class GenerationExecutor:
         self,
         generic_generator: GenericCodeGenerator,
         code_validator: CodeValidator,
-        project_builder: ProjectBuilder,
+        project_builder: ArtifactProjectBuilder,
         dependency_resolver: DependencyResolver,
         *,
         configuration: GenerationExecutorConfiguration | None = None,

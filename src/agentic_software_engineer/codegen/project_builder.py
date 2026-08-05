@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import RLock
+from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -47,6 +48,16 @@ class RollbackResult(BaseModel):
     action: str = Field(min_length=1, description="Restore, remove, or no-operation action.")
     restored_hash: str | None = Field(default=None, description="SHA-256 hash of restored content when applicable.")
     message: str = Field(min_length=1, description="Safe, actionable rollback summary.")
+
+
+class ArtifactProjectBuilder(Protocol):
+    """Persistence boundary for validated generated artifacts."""
+
+    def write(self, artifact: GeneratedArtifact, specification: FileSpecification) -> WriteResult:
+        """Persist one validated artifact according to its overwrite policy."""
+
+    def rollback_latest(self) -> RollbackResult:
+        """Compensate the most recent successful artifact write."""
 
 
 @dataclass(frozen=True, slots=True)
