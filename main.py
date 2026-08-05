@@ -12,25 +12,11 @@ from openai import AsyncOpenAI
 from rich.console import Console
 from rich.table import Table
 
-from agentic_software_engineer.agents.planning_agent import PlanningAgent
-from agentic_software_engineer.agents.requirement_agent import RequirementAgent
-from agentic_software_engineer.agents.architecture_agent import ArchitectureAgent
-from agentic_software_engineer.agents.coding_agent import CodingAgent
-from agentic_software_engineer.agents.prompt_loader import FilePromptLoader
-from agentic_software_engineer.codegen.architecture_code_plan_generator import ArchitectureCodePlanGenerator
-from agentic_software_engineer.codegen.dependency_resolver import DependencyResolver
-from agentic_software_engineer.codegen.generation_executor import GenerationExecutor
-from agentic_software_engineer.codegen.generic_generator import GenericCodeGenerator
-from agentic_software_engineer.codegen.project_builder import ProjectBuilder
 from agentic_software_engineer.domain.entities.architecture_specification import ArchitectureSpecification
 from agentic_software_engineer.domain.entities.code_generation_plan import GenerationReport
-from agentic_software_engineer.llm.openai_client import OpenAIClientConfiguration, OpenAILLMClient
-from agentic_software_engineer.memory.in_memory_state_store import InMemorySharedStateStore
+from agentic_software_engineer.infrastructure.di.workflow_factory import build_workflow
 from agentic_software_engineer.orchestrator.state import AgenticSDLCState, WorkflowTimestamps
-from agentic_software_engineer.orchestrator.workflow import AgenticSDLCWorkflow
-from agentic_software_engineer.prompts.file_prompt_registry import FilePromptRegistry
 from agentic_software_engineer.ui.architecture_printer import ArchitecturePrinter
-from agentic_software_engineer.validators.code_validator import CodeValidator
 
 console = Console()
 
@@ -62,13 +48,7 @@ async def run() -> None:
     )
 
     client = AsyncOpenAI()
-    coding_agent = _build_coding_agent(client=client, model=model, project_root=project_root)
-    workflow = AgenticSDLCWorkflow(
-        requirement_agent=RequirementAgent(client=client, model=model),
-        planning_agent=PlanningAgent(client=client, model=model),
-        architecture_agent=ArchitectureAgent(client=client, model=model),
-        coding_agent=coding_agent,
-    )
+    workflow = build_workflow(client=client, model=model, project_root=project_root)
 
     console.print(f"[cyan]Starting execution {execution_id}…[/]")
     workflow_result = await workflow.ainvoke(initial_state, thread_id=execution_id)
@@ -78,31 +58,6 @@ async def run() -> None:
         else AgenticSDLCState.model_validate(workflow_result)
     )
     _render_results(final_state)
-
-
-def _build_coding_agent(*, client: AsyncOpenAI, model: str, project_root: Path) -> CodingAgent:
-    """Compose the injected code-generation stack used by the console workflow.
-
-    The builder confines all generated files to the execution-specific project
-    directory and shares the configured OpenAI model with the upstream agents.
-    """
-    prompt_root = Path(__file__).resolve().parent / "src" / "agentic_software_engineer" / "prompts" / "coding"
-    generator = GenericCodeGenerator(
-        llm_client=OpenAILLMClient(client, OpenAIClientConfiguration(model=model)),
-        prompt_registry=FilePromptRegistry(prompt_root),
-        prompt_loader=FilePromptLoader(),
-    )
-    executor = GenerationExecutor(
-        generic_generator=generator,
-        code_validator=CodeValidator(),
-        project_builder=ProjectBuilder(project_root),
-        dependency_resolver=DependencyResolver(),
-    )
-    return CodingAgent(
-        code_plan_generator=ArchitectureCodePlanGenerator(),
-        generation_executor=executor,
-        state_store=InMemorySharedStateStore.get_instance(),
-    )
 
 
 def _render_results(state: AgenticSDLCState) -> None:

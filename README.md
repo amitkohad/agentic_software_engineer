@@ -2,6 +2,21 @@
 
 Enterprise-ready project scaffold for an autonomous software development lifecycle platform.
 
+## Run the interfaces
+
+Configure `OPENAI_API_KEY` and `OPENAI_MODEL`, install the project dependencies,
+then start either interface:
+
+```powershell
+python main.py
+streamlit run streamlit_app.py
+```
+
+Both interfaces execute the same dependency-injected LangGraph workflow. The
+Streamlit UI retains the current result for the browser session and provides
+architecture, planning, audit, validation, source-preview, and ZIP-download
+views. Generated projects are written beneath `generated_projects/<execution-id>`.
+
 ## Architecture
 
 The source tree follows Clean Architecture. Dependencies point inward: API and infrastructure adapters depend on application use cases; application depends on the domain; domain stays framework-independent.
